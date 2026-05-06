@@ -1,0 +1,131 @@
+# =============================================================================
+# @caldera/platformx-sdk — GitLab CI/CD
+# =============================================================================
+
+stages:
+  - test
+  - build
+  - publish
+  - mirror
+
+.configure-npmrc: &configure-npmrc
+  - echo "@caldera:registry=https://gitlab.com/api/v4/groups/127464903/-/packages/npm/" > .npmrc
+  - echo "//gitlab.com/api/v4/groups/127464903/-/packages/npm/:_authToken=${CI_JOB_TOKEN}" >> .npmrc
+  # Authenticate project-level URLs that npm follows from the lockfile
+  # (each @caldera/* dep has its own /projects/<id>/packages/npm/ URL).
+  # CI_JOB_TOKEN must be allowed on each upstream project — see each
+  # repo's Settings → CI/CD → Job token permissions allowlist.
+  - echo "//gitlab.com/api/v4/projects/:_authToken=${CI_JOB_TOKEN}" >> .npmrc
+
+test:
+  stage: test
+  image: node:22-alpine
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+      - .npm/
+  script:
+    - *configure-npmrc
+    - npm install --prefer-offline
+    - npm run test:ci
+  rules:
+    - when: always
+
+build:
+  stage: build
+  image: node:22-alpine
+  needs:
+    - test
+  script:
+    - *configure-npmrc
+    - npm install --prefer-offline
+    - npm run build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 hour
+  rules:
+    - when: always
+
+# Publish — version tags only, AND only when the tagged commit is reachable
+# from origin/master. Prevents publishing from unmerged feature branches.
+publish:
+  stage: publish
+  image: node:22-alpine
+  needs:
+    - build
+  before_script:
+    - apk add --no-cache git
+    - git fetch --no-tags origin master
+    - |
+      if ! git merge-base --is-ancestor "${CI_COMMIT_SHA}" origin/master; then
+        echo "ERROR: Tag ${CI_COMMIT_TAG} (${CI_COMMIT_SHA}) is not reachable from origin/master."
+        echo "       Merge to master before creating a version tag."
+        exit 1
+      fi
+    - |
+      PKG_VERSION=$(node -p "require('./package.json').version")
+      TAG_VERSION="${CI_COMMIT_TAG#v}"
+      if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+        echo "ERROR: package.json version ($PKG_VERSION) != tag ($TAG_VERSION)."
+        exit 1
+      fi
+  script:
+    - NPM_REGISTRY="https://${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/"
+    - echo "@caldera:registry=${NPM_REGISTRY}" > .npmrc
+    - echo "//${CI_SERVER_HOST}/api/v4/projects/${CI_PROJECT_ID}/packages/npm/:_authToken=${CI_JOB_TOKEN}" >> .npmrc
+    - npm publish --registry="${NPM_REGISTRY}"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# ---------------------------------------------------------------------------
+# GitHub mirror — push the SDK to calderax/platformxe-sdk on GitHub
+#
+# Runs on master push (so consumer apps using `npm install … --git` against
+# the GitHub remote get updates) and on version-tag push (so the GitHub
+# remote carries the same tags as GitLab — useful for archived references
+# and external integrations).
+#
+# Requires GITHUB_TOKEN in Settings → CI/CD → Variables (PAT with `repo`
+# scope on calderax/platformxe-sdk).
+# ---------------------------------------------------------------------------
+mirror:github:
+  stage: mirror
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache git
+    - git config --global user.name "PlatformXe CI"
+    - git config --global user.email "ci@platformxe.com"
+  script:
+    - |
+      if [ -z "$GITHUB_TOKEN" ]; then
+        echo "GITHUB_TOKEN not set — skipping mirror"
+        exit 0
+      fi
+
+      TMPDIR=$(mktemp -d)
+      # Copy the entire repo content (including dotfiles) into a clean tree.
+      # Drop .git so we start from a clean history on the GitHub side.
+      cp -r ./* "$TMPDIR/" 2>/dev/null || true
+      cp -r ./.[!.]* "$TMPDIR/" 2>/dev/null || true
+      rm -rf "$TMPDIR/.git"
+
+      cd "$TMPDIR"
+      git init
+      git add -A
+      git commit -m "Mirror from GitLab ($(date -u +%Y-%m-%dT%H:%M:%SZ))" --allow-empty
+      git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/calderax/platformxe-sdk.git"
+      git branch -M main
+      git push github main --force
+
+      # If this is a tagged build, push the tag too.
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        git tag "$CI_COMMIT_TAG"
+        git push github "$CI_COMMIT_TAG" --force
+      fi
+
+      echo "✓ TypeScript SDK mirrored to calderax/platformxe-sdk"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == "master"

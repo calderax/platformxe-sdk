@@ -1,0 +1,45 @@
+{
+  "name": "@caldera/platformxe-sdk",
+  "version": "1.4.0",
+  "description": "Official TypeScript SDK for the PlatformXe API — messaging, storage, OCR, PDF, webhooks, workflows, and more.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ci": "npm run typecheck && npm run test",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@caldera/platformxe-types": "^2.6.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.0"
+  },
+  "publishConfig": {
+    "@caldera:registry": "https://gitlab.com/api/v4/projects/81268099/packages/npm/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/calderasuite/caldera-platformxe-sdk.git"
+  },
+  "author": "Caldera Technologies Ltd.",
+  "license": "UNLICENSED"
+}
